@@ -1,0 +1,5 @@
+#include "src/font.c"
+#include "src/ui.c"
+#include "src/uidrawlist.c"
+#include "src/uirender.c"
+#include "src/uivisual.c"

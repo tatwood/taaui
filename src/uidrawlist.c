@@ -1,45 +1,54 @@
 /**
- * @brief     ui render buffer and command list generation implementation
+ * @brief     ui vertex buffer and command list generation implementation
  * @author    Thomas Atwood (tatwood.net)
  * @date      2011
  * @copyright unlicense / public domain
  ****************************************************************************/
-#include <taaui/uidrawlist.h>
+#include <taa/uidrawlist.h>
+#include <taa/mat44.h>
+#include <taa/scalar.h>
 
-struct taa_uidrawlist_builder_s
+enum
 {
-    taa_vertexbuffer vb[2];
-    uint8_t* verts;
-    taa_uidrawlist_cmd* cmds;
-    uint32_t vertoffset;
-    uint32_t vertssize;
-    uint32_t cmdindex;
-    uint32_t maxcmds;
-    uint32_t writevb;
+    taa_UIDRAWLIST_TRANSFORMSTACK_SIZE = 16
+};
+
+struct taa_ui_drawlist_s
+{
+    taa_mat44 transformstack[taa_UIDRAWLIST_TRANSFORMSTACK_SIZE];
+    taa_ui_vertex* verts;
+    taa_ui_drawlist_cmd* cmds;
+    uint32_t stackdepth;
+    size_t vertindex;
+    size_t maxverts;
+    size_t cmdindex;
+    size_t maxcmds;
 };
 
 //****************************************************************************
-void taa_uidrawlist_addrect(
-    taa_uidrawlist_builder* dlb,
+void taa_ui_add_drawlist_rect(
+    taa_ui_drawlist* drawlist,
     taa_texture2d texture,
     uint32_t color,
-    int32_t x,
-    int32_t y,
-    int32_t w,
-    int32_t h,
+    int x,
+    int y,
+    int w,
+    int h,
     const taa_ui_rect* cliprect,
     const taa_vec2* uvlt,
     const taa_vec2* uvrb)
 {
-    taa_uidrawlist_vertex* v = (taa_uidrawlist_vertex*)(dlb->verts+dlb->vertoffset);
-    taa_uidrawlist_cmd* cmd = dlb->cmds + dlb->cmdindex;
-    if(dlb->vertoffset + 6*sizeof(v) <= dlb->vertssize)
+    taa_ui_vertex* v;
+    taa_ui_drawlist_cmd* cmd;
+    v = drawlist->verts + drawlist->vertindex;
+    cmd = drawlist->cmds + drawlist->cmdindex;
+    if(drawlist->vertindex + 6 <= drawlist->maxverts)
     {
-        int32_t xr = x + w;
-        int32_t yb = y + h;
-        if (x  < (cliprect->x + ((int32_t) cliprect->w)) &&
+        int xr = x + w;
+        int yb = y + h;
+        if (x  < (cliprect->x + ((int) cliprect->w)) &&
             xr > cliprect->x &&
-            y  < (cliprect->y + ((int32_t) cliprect->h)) &&
+            y  < (cliprect->y + ((int) cliprect->h)) &&
             yb > cliprect->y)
         {
             // if rectangle is visible, add it to the draw call list
@@ -47,18 +56,19 @@ void taa_uidrawlist_addrect(
             {
                 // if the texture is different than the texture from the
                 // previous draw call, a new command must be generated
+                size_t vboffset = drawlist->vertindex * sizeof(*v);
                 if(cmd->numvertices == 0)
                 {
                     cmd->texture = texture;
-                    cmd->vboffset = dlb->vertoffset;
+                    cmd->vboffset = vboffset;
                     cmd->numvertices = 0;
                 }
-                else if(dlb->cmdindex+1 < dlb->maxcmds)
+                else if(drawlist->cmdindex+1 < drawlist->maxcmds)
                 {
-                    ++dlb->cmdindex;
+                    ++drawlist->cmdindex;
                     ++cmd;
                     cmd->texture = texture;
-                    cmd->vboffset = dlb->vertoffset;
+                    cmd->vboffset = vboffset;
                     cmd->numvertices = 0;
                 }
                 else
@@ -85,7 +95,7 @@ void taa_uidrawlist_addrect(
                 {
                     float s = ((float) (cliprect->y - y))/h;
                     uv0.y = taa_mix(uvlt->y, uvrb->y, s);
-                    pos0.y = (float) cliprect->y;            
+                    pos0.y = (float) cliprect->y;
                 }
                 if(((int32_t) (cliprect->x + cliprect->w)) < xr)
                 {
@@ -125,7 +135,7 @@ void taa_uidrawlist_addrect(
                 v->color = color;
                 // move the buffer forwards
                 cmd->numvertices += 6;
-                dlb->vertoffset += 6*sizeof(*v);
+                drawlist->vertindex += 6;
             }
         }
     }
@@ -137,41 +147,44 @@ void taa_uidrawlist_addrect(
 }
 
 //****************************************************************************
-void taa_uidrawlist_addtext(
-    taa_uidrawlist_builder* dlb,
-    const taa_font* font,
+void taa_ui_add_drawlist_text(
+    taa_ui_drawlist* drawlist,
+    const taa_ui_font* font,
     uint32_t color,
     const char* txt,
-    uint32_t txtlen,
-    int32_t x,
-    int32_t y,
-    int32_t w,
-    int32_t h,
-    int32_t scrollx,
-    int32_t scrolly,
+    size_t txtlen,
+    int x,
+    int y,
+    int w,
+    int h,
+    int scrollx,
+    int scrolly,
     taa_ui_halign halign,
     taa_ui_valign valign,
     const taa_ui_rect* cliprect)
 {
-    taa_uidrawlist_cmd* cmd = dlb->cmds + dlb->cmdindex;
-    taa_font_vertex* v = (taa_font_vertex*) (dlb->verts + dlb->vertoffset);
+    taa_ui_drawlist_cmd* cmd;
+    taa_ui_vertex* v;
+    cmd = drawlist->cmds + drawlist->cmdindex;
+    v = drawlist->verts + drawlist->vertindex;
     // get a draw call command pointer
     if (memcmp(&cmd->texture, &font->texture, sizeof(font->texture)) != 0)
     {
         // if the font texture is different than the texture from the previous
         // draw call, a new command must be generated
+        size_t vboffset = drawlist->vertindex * sizeof(*v);
         if(cmd->numvertices == 0)
         {
             cmd->texture = font->texture;
-            cmd->vboffset = dlb->vertoffset;
+            cmd->vboffset = vboffset;
             cmd->numvertices = 0;
         }
-        else if(dlb->cmdindex+1 < dlb->maxcmds)
+        else if(drawlist->cmdindex+1 < drawlist->maxcmds)
         {
-            ++dlb->cmdindex;
+            ++drawlist->cmdindex;
             ++cmd;
             cmd->texture = font->texture;
-            cmd->vboffset = dlb->vertoffset;
+            cmd->vboffset = vboffset;
             cmd->numvertices = 0;
         }
         else
@@ -183,17 +196,19 @@ void taa_uidrawlist_addtext(
     }
     if(cmd != NULL)
     {
-        int32_t txth = font->charheight;
-        int32_t n;
+        int txth = font->charheight;
+        int n;
         // horizontally align
         switch(halign)
         {
         case taa_UI_HALIGN_CENTER:
             {
-                int32_t txtw = taa_font_textwidth(font, txt, txtlen);
+                int txtw = taa_ui_calc_font_width(font, txt, txtlen);
                 if(txtw <= w)
                 {
-                    x += ((w - txtw) >> 1);
+                    int xoff = ((w - txtw) >> 1);
+                    x += xoff;
+                    w -= xoff;
                 }
                 else
                 {
@@ -205,10 +220,12 @@ void taa_uidrawlist_addtext(
             break;
         case taa_UI_HALIGN_RIGHT:
             {
-                int32_t txtw = taa_font_textwidth(font, txt, txtlen);
+                int txtw = taa_ui_calc_font_width(font, txt, txtlen);
                 if(w > txtw)
                 {
-                    x += w - txtw;
+                    int xoff = w - txtw;
+                    x += xoff;
+                    w -= xoff;
                 }
                 else
                 {
@@ -223,11 +240,13 @@ void taa_uidrawlist_addtext(
         case taa_UI_VALIGN_CENTER:
             if(txth <= h)
             {
-                y = y + ((h-txth)>>1);
+                int yoff =  ((h - txth) >> 1);
+                y += yoff;
+                h -= yoff;
             }
             else
             {
-                scrolly += ((txth-h)>>1);
+                scrolly += ((txth - h) >> 1);
             }
             break;
         case taa_UI_VALIGN_TOP:
@@ -235,7 +254,9 @@ void taa_uidrawlist_addtext(
         case taa_UI_VALIGN_BOTTOM:
             if(h > txth)
             {
-                y += h - txth;
+                int yoff = h - txth;
+                y += yoff;
+                h -= yoff;
             }
             else
             {
@@ -244,9 +265,9 @@ void taa_uidrawlist_addtext(
             break;
         }
         // clip the text
-        if(x+w > cliprect->x+cliprect->w)
+        if(x-scrollx+w > cliprect->x+cliprect->w)
         {
-            w =  cliprect->x + cliprect->w - x;
+            w =  cliprect->x + cliprect->w - (x-scrollx);
         }
         if(x < cliprect->x)
         {
@@ -254,9 +275,9 @@ void taa_uidrawlist_addtext(
             w -= cliprect->x - x;
             x = cliprect->x;
         }
-        if(y+h > cliprect->y+cliprect->h)
+        if(y-scrolly+h > cliprect->y+cliprect->h)
         {
-            h =  cliprect->y + cliprect->h - y;
+            h =  cliprect->y + cliprect->h - (y-scrolly);
         }
         if(y < cliprect->y)
         {
@@ -265,7 +286,7 @@ void taa_uidrawlist_addtext(
             y = cliprect->y;
         }
         // generate vertices
-        n = taa_font_genvertices(
+        n = taa_ui_gen_font_vertices(
             font,
             txt,
             txtlen,
@@ -277,73 +298,80 @@ void taa_uidrawlist_addtext(
             scrolly,
             color,
             v,
-            (dlb->vertssize - dlb->vertoffset)/sizeof(*v));
+            drawlist->maxverts - drawlist->vertindex);
         cmd->numvertices += n;
-        dlb->vertoffset += n*sizeof(*v);
+        drawlist->vertindex += n;
     }
 }
 
 //****************************************************************************
-void taa_uidrawlist_begin(
-    taa_uidrawlist_builder* dlb)
+void taa_ui_begin_drawlist(
+    taa_ui_drawlist* drawlist,
+    taa_ui_drawlist_cmd* cmds,
+    size_t maxcmds,
+    taa_ui_vertex* verts,
+    size_t maxverts)
 {
-    taa_vertexbuffer_bind(dlb->vb[dlb->writevb]);
-    dlb->verts = (uint8_t*) taa_vertexbuffer_map(taa_BUFACCESS_WRITE_ONLY);
-    dlb->vertoffset = 0;
-    dlb->cmdindex = 0;
-    dlb->cmds->numvertices = 0;
+    drawlist->cmds = cmds;
+    drawlist->maxcmds = maxcmds;
+    drawlist->verts = verts;
+    drawlist->vertindex = 0;
+    drawlist->maxverts = maxverts;
+    drawlist->cmdindex = 0;
+    drawlist->cmds->numvertices = 0;
 }
 
 //****************************************************************************
-void taa_uidrawlist_createbuilder(
-    uint32_t verticessize,
-    uint32_t maxcmds,
-    taa_uidrawlist_builder** dlbout)
+void taa_ui_create_drawlist(
+    taa_ui_drawlist** drawlist_out)
 {
-    void* buf;
-    uint32_t bufsize;
-    taa_uidrawlist_builder* dlb;
-    bufsize = sizeof(*dlb) + maxcmds*sizeof(*dlb->cmds);
-    buf = malloc(bufsize);
-    dlb = (taa_uidrawlist_builder*) buf;
-    buf = dlb + 1;
-    dlb->cmds = (taa_uidrawlist_cmd*) buf;
-    taa_vertexbuffer_create(dlb->vb + 0);
-    taa_vertexbuffer_bind(dlb->vb[0]);
-    taa_vertexbuffer_data(verticessize, NULL, taa_BUFUSAGE_DYNAMIC_DRAW);
-    taa_vertexbuffer_create(dlb->vb + 1);
-    taa_vertexbuffer_bind(dlb->vb[1]);
-    taa_vertexbuffer_data(verticessize, NULL, taa_BUFUSAGE_DYNAMIC_DRAW);
-    dlb->verts = NULL;
-    dlb->vertoffset = 0;
-    dlb->vertssize = verticessize;
-    dlb->cmdindex = 0;
-    dlb->maxcmds = maxcmds;
-    dlb->writevb = 0;
-    *dlbout = dlb;
+    taa_ui_drawlist* drawlist;
+    drawlist = (taa_ui_drawlist*) taa_memalign(16, sizeof(*drawlist));
+    // initialize struct
+    drawlist->cmds = NULL;
+    drawlist->verts = NULL;
+    drawlist->stackdepth = 0;
+    drawlist->cmdindex = 0;
+    drawlist->maxcmds = 0;
+    drawlist->vertindex = 0;
+    drawlist->maxverts = 0;
+    taa_mat44_identity( drawlist->transformstack + 0);
+    // set out param
+    *drawlist_out =  drawlist;
 }
 
 //****************************************************************************
-void taa_uidrawlist_destroybuilder(
-    taa_uidrawlist_builder* dlb)
+void taa_ui_destroy_drawlist(
+    taa_ui_drawlist* drawlist)
 {
-    taa_vertexbuffer_destroy(dlb->vb[0]);
-    taa_vertexbuffer_destroy(dlb->vb[1]);
-    free(dlb);
+    taa_memalign_free(drawlist);
 }
 
 //****************************************************************************
-void taa_uidrawlist_end(
-    taa_uidrawlist_builder* dlb,
-    taa_uidrawlist* dlout)
+void taa_ui_end_drawlist(
+    taa_ui_drawlist* drawlist,
+    size_t* numcmds_out,
+    size_t* numverts_out)
 {
-    dlout->vb = dlb->vb[dlb->writevb];
-    dlout->cmds = dlb->cmds;
-    dlout->numcmds = dlb->cmdindex;
-    if(dlout->cmds[dlb->cmdindex].numvertices > 0)
+    assert(drawlist->stackdepth == 0);
+    if(drawlist->cmds[drawlist->cmdindex].numvertices > 0)
     {
         // if a command was in progress, finish it
-        ++dlout->numcmds;
+        ++drawlist->cmdindex;
     }
-    dlb->writevb ^= 1;
+    *numcmds_out = drawlist->cmdindex;
+    *numverts_out = drawlist->vertindex;
+}
+
+//****************************************************************************
+void taa_ui_pop_drawlist_transform(
+    taa_ui_drawlist* drawlist)
+{
+}
+
+//****************************************************************************
+void taa_ui_push_drawlist_transform(
+    taa_ui_drawlist* drawlist,
+    const taa_mat44* transform)
+{
 }
